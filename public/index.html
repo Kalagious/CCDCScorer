@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CCDC Scoreboard</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .overview-layout { display: flex; flex-direction: column; gap: 20px; height: 100%; }
+
+    /* Main chart */
+    .main-chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      height: 45vh;
+      min-height: 220px;
+      max-height: 420px;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .main-chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      flex-shrink: 0;
+    }
+    .chart-legend {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      opacity: 1;
+      transition: opacity .2s;
+    }
+    .legend-item.muted { opacity: .3; }
+    .legend-line {
+      width: 20px; height: 2px;
+      border-radius: 2px;
+      position: relative;
+    }
+    .legend-line::after {
+      content: '';
+      position: absolute;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      top: -2px; left: 7px;
+      background: inherit;
+    }
+    #main-svg-wrap {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+    #main-svg {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+
+    /* Rankings strip */
+    .rankings {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .rank-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: border-color .15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .rank-row::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--team-color, var(--accent));
+      box-shadow: 0 0 8px var(--team-color, var(--accent));
+    }
+    .rank-row:hover { border-color: var(--team-color, var(--accent)); }
+    .rank-num {
+      font-family: var(--font-mono);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-muted);
+      width: 28px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .rank-num.gold   { color: #ffd700; text-shadow: 0 0 10px #ffd700; }
+    .rank-num.silver { color: #c0c0c0; text-shadow: 0 0 10px #c0c0c0; }
+    .rank-num.bronze { color: #cd7f32; text-shadow: 0 0 10px #cd7f32; }
+    .rank-name {
+      font-weight: 700;
+      font-size: 15px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .rank-score {
+      font-family: var(--font-mono);
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--team-color, var(--accent));
+      text-shadow: 0 0 12px var(--team-color, var(--accent));
+      min-width: 80px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .rank-services {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      min-width: 120px;
+      justify-content: flex-end;
+      flex-shrink: 0;
+    }
+    .rank-bar-bg {
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      background: var(--team-color, var(--accent));
+      opacity: .06;
+      transition: width .6s ease;
+    }
+
+    /* Detail view */
+    .detail-chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 20px;
+      height: 260px;
+      display: flex;
+      flex-direction: column;
+    }
+    #detail-svg-wrap { flex: 1; min-height: 0; }
+    #detail-svg { width: 100%; height: 100%; overflow: visible; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      CCDC&nbsp;LIVE
+    </div>
+    <div id="team-list"></div>
+  </aside>
+  <main class="main" style="overflow-y:auto;">
+    <div class="topbar" style="flex-shrink:0">
+      <h1 id="main-title">// SCOREBOARD</h1>
+      <a href="admin.html" style="color:var(--text-muted);font-family:var(--font-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase">[ ADMIN ]</a>
+    </div>
+    <div id="overview-view" style="flex-shrink:0;display:flex;flex-direction:column;gap:20px;">
+      <div class="main-chart-card">
+        <div class="main-chart-header">
+          <span style="font-family:var(--font-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">// Score Over Time</span>
+          <div class="chart-legend" id="chart-legend"></div>
+        </div>
+        <div id="main-svg-wrap">
+          <svg id="main-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+      </div>
+      <div class="rankings" id="rankings"></div>
+    </div>
+    <div id="detail-view" class="hidden" style="flex:1;overflow-y:auto;">
+      <div id="detail-content"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+const POLL_MS = 10000;
+let scores = [];
+let selectedTeam = null;
+let hiddenTeams = new Set();
+let ws;
+
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}`);
+  ws.onmessage = () => refresh();
+  ws.onclose = () => setTimeout(connectWs, 3000);
+}
+
+async function refresh() {
+  const r = await fetch('/api/scores');
+  scores = await r.json();
+  renderSidebar();
+  if (selectedTeam !== null) {
+    await loadDetail(selectedTeam);
+  } else {
+    renderOverview();
+  }
+}
+
+function selectTeam(id) {
+  selectedTeam = id;
+  document.querySelectorAll('.sidebar-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.id == (id === null ? 'null' : id))
+  );
+  if (id === null) {
+    document.getElementById('main-title').textContent = '// SCOREBOARD';
+    document.getElementById('overview-view').style.display = '';
+    document.getElementById('detail-view').classList.add('hidden');
+    renderOverview();
+  } else {
+    const t = scores.find(s => s.id == id);
+    document.getElementById('main-title').textContent = `// ${t ? t.name.toUpperCase() : 'TEAM'}`;
+    document.getElementById('overview-view').style.display = 'none';
+    document.getElementById('detail-view').classList.remove('hidden');
+    loadDetail(id);
+  }
+}
+
+function renderSidebar() {
+  const el = document.getElementById('team-list');
+  const sorted = [...scores].sort((a, b) => b.total - a.total);
+  const all = `<div class="sidebar-item ${selectedTeam === null ? 'active' : ''}" data-id="null" onclick="selectTeam(null)">
+    <div class="team-dot" style="background:var(--accent)"></div>All Teams
+  </div>`;
+  const items = sorted.map(t => `
+    <div class="sidebar-item ${selectedTeam == t.id ? 'active' : ''}" data-id="${t.id}" onclick="selectTeam(${t.id})">
+      <div class="team-dot" style="background:${t.color}"></div>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</span>
+      <span style="color:var(--text-muted);font-family:var(--font-mono);font-size:12px">${t.total}</span>
+    </div>`).join('');
+  el.innerHTML = all + items;
+}
+
+// ── Multi-line chart ───────────────────────────────────────────────────────────
+const WINDOW_SEC = 20 * 60; // 20 minutes
+
+function renderMainChart() {
+  const wrap = document.getElementById('main-svg-wrap');
+  const W = wrap.clientWidth || 800;
+  const H = wrap.clientHeight || 300;
+  const PAD = { top: 16, right: 80, bottom: 36, left: 56 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const winStart = nowSec - WINDOW_SEC;
+
+  // x: fixed 20-min window ending at now
+  const xScale = sec => PAD.left + ((sec - winStart) / WINDOW_SEC) * cW;
+
+  // y: 0 at bottom, max from visible data within the window
+  const visible = scores.filter(t => !hiddenTeams.has(t.id));
+  const windowPts = visible.flatMap(t =>
+    (t.history || []).filter(h => h.bucket >= winStart).map(h => h.pts)
+  );
+  const maxY = Math.max(...windowPts, 100);
+  const yScale = v => PAD.top + cH - (v / maxY) * cH;
+
+  let out = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:100%">
+    <defs>
+      <clipPath id="chart-clip">
+        <rect x="${PAD.left}" y="${PAD.top - 8}" width="${cW + 8}" height="${cH + 16}"/>
+      </clipPath>
+    </defs>`;
+
+  // y grid lines (always from 0)
+  const yTicks = 5;
+  for (let i = 0; i <= yTicks; i++) {
+    const v = (maxY / yTicks) * i;
+    const y = yScale(v);
+    out += `<line x1="${PAD.left}" y1="${y}" x2="${W - PAD.right}" y2="${y}"
+      stroke="rgba(26,58,92,0.5)" stroke-width="1" stroke-dasharray="4,4"/>`;
+    out += `<text x="${PAD.left - 6}" y="${y + 4}" text-anchor="end"
+      font-family="Share Tech Mono, monospace" font-size="10" fill="#3d7a9e">${Math.round(v)}</text>`;
+  }
+
+  // x time ticks — every 2 minutes
+  const tickInterval = 2 * 60;
+  const firstTick = Math.ceil(winStart / tickInterval) * tickInterval;
+  for (let t = firstTick; t <= nowSec; t += tickInterval) {
+    const x = xScale(t);
+    const d = new Date(t * 1000);
+    const label = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+    out += `<line x1="${x}" y1="${PAD.top}" x2="${x}" y2="${PAD.top + cH}"
+      stroke="rgba(26,58,92,0.3)" stroke-width="1"/>`;
+    out += `<text x="${x}" y="${PAD.top + cH + 18}" text-anchor="middle"
+      font-family="Share Tech Mono, monospace" font-size="10" fill="#3d7a9e">${label}</text>`;
+  }
+
+  // axes
+  out += `<line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + cH}"
+    stroke="#1a3a5c" stroke-width="1"/>`;
+  out += `<line x1="${PAD.left}" y1="${PAD.top + cH}" x2="${W - PAD.right}" y2="${PAD.top + cH}"
+    stroke="#1a3a5c" stroke-width="1"/>`;
+
+  // "now" line on right edge
+  const nowX = xScale(nowSec);
+  out += `<line x1="${nowX}" y1="${PAD.top}" x2="${nowX}" y2="${PAD.top + cH}"
+    stroke="rgba(0,212,255,0.25)" stroke-width="1" stroke-dasharray="3,3"/>`;
+  out += `<text x="${nowX + 4}" y="${PAD.top + 10}"
+    font-family="Share Tech Mono, monospace" font-size="9" fill="rgba(0,212,255,0.5)">NOW</text>`;
+
+  // lines + dots per team
+  for (const team of scores) {
+    if (hiddenTeams.has(team.id)) continue;
+    // include one point before the window so line enters from left edge correctly
+    const hist = (team.history || []).filter(h => h.bucket >= winStart - 310);
+    if (!hist.length) continue;
+
+    // Build points — extend to "now" so line is always current
+    const rawPts = hist.map(h => ({ x: xScale(h.bucket), y: yScale(h.pts), pts: h.pts }));
+    const lastPt = rawPts[rawPts.length - 1];
+    const extPts = [...rawPts, { x: nowX, y: lastPt.y, pts: lastPt.pts }];
+
+    const ptStr = extPts.map(p => `${p.x},${p.y}`).join(' ');
+    out += `<polyline points="${ptStr}" fill="none" stroke="${team.color}" stroke-width="2.5"
+      stroke-linejoin="round" stroke-linecap="round" clip-path="url(#chart-clip)"
+      style="filter:drop-shadow(0 0 4px ${team.color})"/>`;
+
+    // Dots where the score changes (slope change), clipped to chart area
+    for (let i = 0; i < extPts.length; i++) {
+      const p = extPts[i];
+      const prev = extPts[i - 1];
+      const next = extPts[i + 1];
+      const slopeChange = (prev && prev.pts !== p.pts) || (next && next.pts !== p.pts);
+      if (!slopeChange) continue;
+      out += `<circle cx="${p.x}" cy="${p.y}" r="4" fill="var(--bg)" stroke="${team.color}" stroke-width="2"
+        clip-path="url(#chart-clip)" style="filter:drop-shadow(0 0 5px ${team.color})">
+        <title>${esc(team.name)}: ${p.pts} pts</title>
+      </circle>`;
+    }
+
+    // end label near "now"
+    out += `<text x="${nowX + 6}" y="${lastPt.y + 4}"
+      font-family="Share Tech Mono, monospace" font-size="11" fill="${team.color}"
+      style="filter:drop-shadow(0 0 4px ${team.color})">${esc(team.name)}</text>`;
+  }
+
+  out += '</svg>';
+  wrap.innerHTML = out;
+}
+
+function renderLegend() {
+  const el = document.getElementById('chart-legend');
+  el.innerHTML = scores.map(t => `
+    <div class="legend-item ${hiddenTeams.has(t.id) ? 'muted' : ''}" onclick="toggleTeam(${t.id})">
+      <div class="legend-line" style="background:${t.color};box-shadow:0 0 5px ${t.color}"></div>
+      ${esc(t.name)}
+    </div>`).join('');
+}
+
+function toggleTeam(id) {
+  if (hiddenTeams.has(id)) hiddenTeams.delete(id);
+  else hiddenTeams.add(id);
+  renderLegend();
+  renderMainChart();
+}
+
+function renderRankings() {
+  const el = document.getElementById('rankings');
+  if (!scores.length) { el.innerHTML = ''; return; }
+  const sorted = [...scores].sort((a, b) => b.total - a.total);
+  const maxPts = sorted[0]?.total || 1;
+  const rankClass = i => i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+  el.innerHTML = sorted.map((t, i) => {
+    const pct = Math.max(4, (t.total / maxPts) * 100);
+    const dots = t.services.map(s => {
+      const cls = s.up === null ? 'unknown' : s.up ? 'up' : 'down';
+      return `<div class="service-dot ${cls}" title="${esc(s.instanceLabel)}: ${esc(s.appName)}"></div>`;
+    }).join('');
+    return `<div class="rank-row" style="--team-color:${t.color}" onclick="selectTeam(${t.id})">
+      <div class="rank-bar-bg" style="width:${pct}%"></div>
+      <div class="rank-num ${rankClass(i)}">#${i+1}</div>
+      <div class="rank-name">
+        <div class="team-dot" style="background:${t.color};box-shadow:0 0 6px ${t.color}"></div>
+        ${esc(t.name)}
+      </div>
+      <div class="rank-services">${dots}</div>
+      <div class="rank-score">${t.total}<span style="font-size:11px;color:var(--text-muted);margin-left:3px">pts</span></div>
+    </div>`;
+  }).join('');
+}
+
+function renderOverview() {
+  renderLegend();
+  renderMainChart();
+  renderRankings();
+}
+
+// ── Detail view ───────────────────────────────────────────────────────────────
+async function loadDetail(id) {
+  const r = await fetch(`/api/scores/team/${id}`);
+  const data = await r.json();
+  renderDetailData(id, data);
+}
+
+function renderDetailSingleChart(team) {
+  const hist = team.history || [];
+  const W = 700, H = 180;
+  const PAD = { top: 12, right: 16, bottom: 32, left: 52 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  if (!hist.length) return '<div style="color:var(--text-muted);font-family:var(--font-mono);font-size:12px;padding:20px;text-align:center">NO DATA YET</div>';
+
+  const vals = hist.map(h => h.pts);
+  const maxY = Math.max(...vals, 1);
+  const minY = Math.min(...vals, 0);
+  const rangeY = maxY - minY || 1;
+  const minB = hist[0].bucket, maxB = hist[hist.length-1].bucket;
+  const rangeB = maxB - minB || 1;
+  const xS = b => PAD.left + ((b - minB) / rangeB) * cW;
+  const yS = v => PAD.top + cH - ((v - minY) / rangeY) * cH;
+
+  let out = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:100%">`;
+
+  for (let i = 0; i <= 4; i++) {
+    const v = minY + (rangeY / 4) * i;
+    const y = yS(v);
+    out += `<line x1="${PAD.left}" y1="${y}" x2="${W-PAD.right}" y2="${y}" stroke="rgba(26,58,92,0.5)" stroke-width="1" stroke-dasharray="4,4"/>`;
+    out += `<text x="${PAD.left-6}" y="${y+4}" text-anchor="end" font-family="Share Tech Mono,monospace" font-size="10" fill="#3d7a9e">${Math.round(v)}</text>`;
+  }
+  out += `<line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top+cH}" stroke="#1a3a5c" stroke-width="1"/>`;
+  out += `<line x1="${PAD.left}" y1="${PAD.top+cH}" x2="${W-PAD.right}" y2="${PAD.top+cH}" stroke="#1a3a5c" stroke-width="1"/>`;
+
+  const ptStr = hist.map(h => `${xS(h.bucket)},${yS(h.pts)}`).join(' ');
+  out += `<polyline points="${ptStr}" fill="none" stroke="${team.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" style="filter:drop-shadow(0 0 5px ${team.color})"/>`;
+  for (const h of hist) {
+    out += `<circle cx="${xS(h.bucket)}" cy="${yS(h.pts)}" r="4" fill="${team.color}" stroke="var(--bg)" stroke-width="1.5" style="filter:drop-shadow(0 0 4px ${team.color})"><title>${h.pts} pts</title></circle>`;
+  }
+  out += '</svg>';
+  return out;
+}
+
+function renderDetailData(id, data) {
+  const team = scores.find(t => t.id == id);
+  if (!team) return;
+  const rank = [...scores].sort((a,b) => b.total - a.total).findIndex(t => t.id == id) + 1;
+  const container = document.getElementById('detail-content');
+
+  let instHtml = '';
+  if (data && data.instances && data.instances.length) {
+    instHtml = data.instances.map(inst => {
+      const rows = inst.apps.map(app => {
+        const latest = app.events && app.events[0];
+        const statusClass = latest === undefined ? 'unknown' : latest.success ? 'up' : 'down';
+        const statusText  = latest === undefined ? 'Unknown'  : latest.success ? 'Up'  : 'Down';
+        return `<tr>
+          <td>${esc(app.name)}</td>
+          <td style="color:var(--text-muted)">${esc(app.type)}</td>
+          <td>${app.port || '—'}</td>
+          <td><span class="badge ${statusClass}">${statusText}</span></td>
+          <td>${app.uptime !== null ? app.uptime + '%' : '—'}</td>
+          <td style="color:var(--text-muted)">${app.points}pts / -${app.penalty_points||0}pts / ${app.interval_seconds}s</td>
+        </tr>`;
+      }).join('');
+      return `<div class="instance-card">
+        <div class="instance-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          ${esc(inst.label || inst.ip)}
+          <span style="color:var(--text-muted);font-weight:400;font-size:12px;font-family:var(--font-mono)">${esc(inst.ip)}</span>
+        </div>
+        <table class="app-table">
+          <thead><tr><th>App</th><th>Type</th><th>Port</th><th>Status</th><th>Uptime</th><th>Pts / Penalty / Interval</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }).join('');
+  } else {
+    instHtml = '<div style="color:var(--text-muted);font-family:var(--font-mono);font-size:12px">NO INSTANCES ASSIGNED</div>';
+  }
+
+  container.innerHTML = `
+    <div class="detail-chart-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:16px">
+          <div style="font-size:32px;font-weight:700;font-family:var(--font-mono);color:${team.color};text-shadow:0 0 16px ${team.color}">
+            ${team.total}<span style="font-size:13px;font-weight:400;color:var(--text-muted);margin-left:5px">PTS</span>
+          </div>
+          <div style="color:var(--text-muted);font-family:var(--font-mono);font-size:12px">RANK #${rank}</div>
+        </div>
+        <div class="legend-item" style="cursor:default">
+          <div class="legend-line" style="background:${team.color};box-shadow:0 0 5px ${team.color}"></div>
+          ${esc(team.name)}
+        </div>
+      </div>
+      <div id="detail-svg-wrap" style="flex:1;min-height:0">${renderDetailSingleChart(team)}</div>
+    </div>
+    <div class="detail-section">
+      <h2>// Instances &amp; Services</h2>
+      ${instHtml}
+    </div>`;
+}
+
+function esc(s) {
+  if (!s && s !== 0) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Re-render chart on resize
+const ro = new ResizeObserver(() => { if (selectedTeam === null) renderMainChart(); });
+ro.observe(document.getElementById('main-svg-wrap'));
+
+// Slide the "now" line every 15s without a full data fetch
+setInterval(() => { if (selectedTeam === null) renderMainChart(); }, 15000);
+
+connectWs();
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>

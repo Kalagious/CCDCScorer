@@ -1,0 +1,74 @@
+{
+    "name": "CorpNet Box",
+    "description": "CCDC practice machine with intentional vulns",
+    "applications": [
+      {
+        "name": "Apache Main Site",
+        "type": "http",
+        "port": 80,
+        "http_path": "/",
+        "check_string": "Welcome",
+        "points": 100,
+        "penalty_points": 50,
+        "interval_seconds": 60
+      },
+      {
+        "name": "SSH Service",
+        "type": "ssh",
+        "port": 22,
+        "ssh_user": "deploy",
+        "ssh_password": "deploy",
+        "points": 150,
+        "penalty_points": 75,
+        "interval_seconds": 60
+      },
+      {
+        "name": "FTP Banner",
+        "type": "tcp",
+        "port": 21,
+        "check_string": "220",
+        "points": 75,
+        "penalty_points": 25,
+        "interval_seconds": 60
+      },
+      {
+        "name": "Samba",
+        "type": "tcp",
+        "port": 445,
+        "check_string": null,
+        "points": 75,
+        "penalty_points": 25,
+        "interval_seconds": 60
+      },
+      {
+        "name": "Network Diagnostics",
+        "type": "http",
+        "port": 8080,
+        "http_path": "/",
+        "check_string": "Network Diagnostics",
+        "points": 100,
+        "penalty_points": 50,
+        "interval_seconds": 60
+      },
+      {
+        "name": "Image Gallery",
+        "type": "http",
+        "port": 8888,
+        "http_path": "/",
+        "check_string": "Upload",
+        "points": 100,
+        "penalty_points": 50,
+        "interval_seconds": 60
+      },
+      {
+        "name": "Backup Directory",
+        "type": "http",
+        "port": 80,
+        "http_path": "/backup/",
+        "check_string": "Index of",
+        "points": 75,
+        "penalty_points": 25,
+        "interval_seconds": 60
+      }
+    ]
+  }

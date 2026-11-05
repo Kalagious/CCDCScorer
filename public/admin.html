@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CCDC Admin</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-wrapper" class="hidden">
+  <div class="login-box">
+    <h1>// CCDC ADMIN</h1>
+    <div id="login-error" class="alert error hidden"></div>
+    <div class="field"><label>Username</label><input id="login-user" type="text" autocomplete="username"></div>
+    <div class="field"><label>Password</label><input id="login-pass" type="password" autocomplete="current-password"></div>
+    <button class="primary" style="width:100%;margin-top:6px" onclick="doLogin()">[ AUTHENTICATE ]</button>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app-wrapper" class="hidden admin-layout">
+  <nav class="admin-nav">
+    <div class="admin-nav-title">// CCDC ADMIN</div>
+    <div class="nav-link active" data-page="scoring" onclick="nav('scoring')">Scoring</div>
+    <div class="nav-link" data-page="teams" onclick="nav('teams')">Teams</div>
+    <div class="nav-link" data-page="profiles" onclick="nav('profiles')">Profiles</div>
+    <div class="nav-link" data-page="instances" onclick="nav('instances')">Instances</div>
+    <div style="flex:1"></div>
+    <div style="padding:14px 16px;border-top:1px solid var(--border)">
+      <a href="/" style="color:var(--text-muted);font-family:var(--font-mono);font-size:11px;letter-spacing:.08em">← SCOREBOARD</a>
+      <br><br>
+      <button onclick="doLogout()" style="width:100%">Logout</button>
+    </div>
+  </nav>
+  <div class="admin-main">
+    <div id="page-scoring" class="page"></div>
+    <div id="page-teams" class="page hidden"></div>
+    <div id="page-profiles" class="page hidden"></div>
+    <div id="page-instances" class="page hidden"></div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div id="modal-overlay" class="modal-overlay hidden" onclick="closeModal(event)">
+  <div class="modal" id="modal-box" onclick="event.stopPropagation()"></div>
+</div>
+
+<script>
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function esc(s) {
+  if (!s && s !== 0) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); }
+  return r.json();
+}
+function showModal(html) {
+  document.getElementById('modal-box').innerHTML = html;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('modal-overlay'))
+    document.getElementById('modal-overlay').classList.add('hidden');
+}
+function toast(msg, type='success') {
+  const d = document.createElement('div');
+  d.className = `alert ${type}`;
+  d.style.cssText = 'position:fixed;top:16px;right:16px;z-index:200;max-width:340px;pointer-events:none';
+  d.textContent = msg;
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 3000);
+}
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+async function init() {
+  const me = await api('GET', '/api/me');
+  if (me.admin) showApp();
+  else showLogin();
+}
+function showLogin() {
+  document.getElementById('login-wrapper').classList.remove('hidden');
+  document.getElementById('app-wrapper').classList.add('hidden');
+}
+function showApp() {
+  document.getElementById('login-wrapper').classList.add('hidden');
+  document.getElementById('app-wrapper').classList.remove('hidden');
+  nav('scoring');
+}
+async function doLogin() {
+  const username = document.getElementById('login-user').value;
+  const password = document.getElementById('login-pass').value;
+  const err = document.getElementById('login-error');
+  try {
+    await api('POST', '/api/login', { username, password });
+    err.classList.add('hidden');
+    showApp();
+  } catch(e) {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+  }
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !document.getElementById('login-wrapper').classList.contains('hidden')) doLogin();
+});
+async function doLogout() {
+  await api('POST', '/api/logout');
+  showLogin();
+}
+
+// ── Navigation ─────────────────────────────────────────────────────────────────
+function nav(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.toggle('active', l.dataset.page === page));
+  document.getElementById(`page-${page}`).classList.remove('hidden');
+  pages[page]();
+}
+const pages = { scoring: renderScoring, teams: renderTeams, profiles: renderProfiles, instances: renderInstances };
+
+// ── Scoring ───────────────────────────────────────────────────────────────────
+async function renderScoring() {
+  const el = document.getElementById('page-scoring');
+  const status = await api('GET', '/api/scoring/status');
+  const running = status.running;
+  el.innerHTML = `
+    <h1>// SCORING CONTROL</h1>
+    <div class="card" style="max-width:500px">
+      <div style="margin-bottom:20px;display:flex;align-items:center;gap:12px">
+        <span class="status-pill ${running ? 'running' : 'stopped'}">${running ? '● RUNNING' : '○ STOPPED'}</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="success" onclick="startScoring()" ${running ? 'disabled' : ''}>▶ START</button>
+        <button class="danger" onclick="stopScoring()" ${!running ? 'disabled' : ''}>■ STOP</button>
+        <button onclick="resetScores()" style="margin-left:auto;border-color:var(--yellow);color:var(--yellow)">⚠ RESET SCORES</button>
+      </div>
+    </div>`;
+}
+async function startScoring() { await api('POST', '/api/scoring/start'); toast('Scoring started'); renderScoring(); }
+async function stopScoring() { await api('POST', '/api/scoring/stop'); toast('Scoring stopped'); renderScoring(); }
+async function resetScores() {
+  if (!confirm('Delete ALL score events? This cannot be undone.')) return;
+  await api('POST', '/api/scores/reset');
+  toast('Scores reset');
+}
+
+// ── Teams ─────────────────────────────────────────────────────────────────────
+let teams = [];
+async function renderTeams() {
+  teams = await api('GET', '/api/teams');
+  const el = document.getElementById('page-teams');
+  const rows = teams.map(t => `
+    <tr>
+      <td style="color:var(--text-muted)">${t.id}</td>
+      <td><span class="color-swatch" style="background:${esc(t.color)};box-shadow:0 0 6px ${esc(t.color)}"></span>${esc(t.name)}</td>
+      <td style="font-family:var(--font-mono)">${esc(t.color)}</td>
+      <td class="actions">
+        <button onclick="editTeam(${t.id})">Edit</button>
+        <button class="danger" onclick="deleteTeam(${t.id})">Delete</button>
+      </td>
+    </tr>`).join('');
+  el.innerHTML = `
+    <h1>// TEAMS</h1>
+    <div style="margin-bottom:16px"><button class="primary" onclick="newTeam()">+ NEW TEAM</button></div>
+    <table class="table">
+      <thead><tr><th>ID</th><th>Name</th><th>Color</th><th>Actions</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="4" style="color:var(--text-muted)">No teams</td></tr>'}</tbody>
+    </table>`;
+}
+function teamModal(team={}) {
+  showModal(`
+    <h2>${team.id ? 'EDIT TEAM' : 'NEW TEAM'}</h2>
+    <div class="field"><label>Name</label><input id="m-name" value="${esc(team.name||'')}"></div>
+    <div class="field"><label>Color</label><input id="m-color" type="color" value="${team.color||'#00d4ff'}" style="height:40px;padding:2px;cursor:pointer"></div>
+    <div class="modal-footer">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="saveTeam(${team.id||0})">Save</button>
+    </div>`);
+}
+function newTeam() { teamModal(); }
+function editTeam(id) { teamModal(teams.find(t=>t.id===id)||{}); }
+async function saveTeam(id) {
+  const name = document.getElementById('m-name').value.trim();
+  const color = document.getElementById('m-color').value;
+  if (!name) { toast('Name required','error'); return; }
+  if (id) await api('PUT', `/api/teams/${id}`, { name, color });
+  else await api('POST', '/api/teams', { name, color });
+  closeModal();
+  renderTeams();
+}
+async function deleteTeam(id) {
+  if (!confirm('Delete team?')) return;
+  await api('DELETE', `/api/teams/${id}`);
+  renderTeams();
+}
+
+// ── Profiles ──────────────────────────────────────────────────────────────────
+let profiles = [];
+async function renderProfiles() {
+  profiles = await api('GET', '/api/profiles');
+  const el = document.getElementById('page-profiles');
+  const rows = profiles.map(p => `
+    <tr>
+      <td style="color:var(--text-muted)">${p.id}</td>
+      <td>${esc(p.name)}</td>
+      <td style="color:var(--text-muted)">${esc(p.description)}</td>
+      <td style="font-family:var(--font-mono)">${p.applications ? p.applications.length : 0}</td>
+      <td class="actions">
+        <button onclick="editProfile(${p.id})">Edit</button>
+        <a href="/api/profiles/${p.id}/export" download><button>Export</button></a>
+        <button class="danger" onclick="deleteProfile(${p.id})">Delete</button>
+      </td>
+    </tr>`).join('');
+  el.innerHTML = `
+    <h1>// PROFILES</h1>
+    <div style="display:flex;gap:10px;margin-bottom:16px">
+      <button class="primary" onclick="newProfile()">+ NEW PROFILE</button>
+      <button onclick="importProfile()">Import JSON</button>
+    </div>
+    <table class="table">
+      <thead><tr><th>ID</th><th>Name</th><th>Description</th><th>Apps</th><th>Actions</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5" style="color:var(--text-muted)">No profiles</td></tr>'}</tbody>
+    </table>`;
+}
+
+function appFields(app={}, idx) {
+  const isPing = app.type === 'ping';
+  const isSsh  = app.type === 'ssh';
+  const isHttp = app.type === 'http';
+  const hideTcp = isPing;
+  const hideStr = isSsh;
+  return `
+  <div class="app-entry" id="app-entry-${idx}">
+    <div class="app-entry-header">
+      <span>// APP ${idx+1}</span>
+      <button onclick="removeAppEntry(${idx})" style="padding:2px 8px;border-color:var(--red);color:var(--red)">✕</button>
+    </div>
+    <div class="inline-grid">
+      <div class="field"><label>Name</label><input class="app-name" value="${esc(app.name||'')}"></div>
+      <div class="field"><label>Type</label>
+        <select class="app-type" onchange="toggleAppFields(${idx})">
+          <option value="ping" ${app.type==='ping'?'selected':''}>Ping (ICMP)</option>
+          <option value="tcp"  ${app.type==='tcp' ?'selected':''}>TCP / Response Search</option>
+          <option value="ssh"  ${app.type==='ssh' ?'selected':''}>SSH Account</option>
+          <option value="http" ${app.type==='http'?'selected':''}>HTTP / Web Page Search</option>
+        </select>
+      </div>
+    </div>
+    <div class="inline-grid app-port-row-${idx}" style="${isPing?'display:none':''}">
+      <div class="field"><label>Port</label><input class="app-port" type="number" value="${esc(app.port||'')}"></div>
+      <div class="field app-tcp-str-${idx}" style="${isSsh?'display:none':''}">
+        <label>Response contains (optional)</label><input class="app-check-string" value="${esc(app.check_string||'')}">
+      </div>
+    </div>
+    <div class="field app-http-path-${idx}" style="${isHttp?'':'display:none'}">
+      <label>URL Path (e.g. /index.html)</label>
+      <input class="app-http-path" value="${esc(app.http_path||'/')}">
+    </div>
+    <div class="inline-grid app-ssh-fields-${idx}" style="${isSsh?'':'display:none'}">
+      <div class="field"><label>SSH User</label><input class="app-ssh-user" value="${esc(app.ssh_user||'')}"></div>
+      <div class="field"><label>SSH Password</label><input class="app-ssh-password" type="password" value="${esc(app.ssh_password||'')}"></div>
+    </div>
+    <div class="inline-grid">
+      <div class="field"><label>Points per check</label><input class="app-points" type="number" value="${app.points??100}"></div>
+      <div class="field"><label>Interval (seconds)</label><input class="app-interval" type="number" value="${app.interval_seconds??60}"></div>
+    </div>
+    <div class="field">
+      <label>Downtime penalty (points deducted on failure)</label>
+      <input class="app-penalty" type="number" min="0" value="${app.penalty_points??0}" placeholder="0 = no penalty">
+    </div>
+  </div>`;
+}
+
+function toggleAppFields(idx) {
+  const entry = document.getElementById(`app-entry-${idx}`);
+  const type = entry.querySelector('.app-type').value;
+  const isPing = type === 'ping';
+  const isSsh  = type === 'ssh';
+  const isHttp = type === 'http';
+  entry.querySelector(`.app-port-row-${idx}`).style.display   = isPing ? 'none' : '';
+  entry.querySelector(`.app-tcp-str-${idx}`).style.display    = isSsh  ? 'none' : '';
+  entry.querySelector(`.app-ssh-fields-${idx}`).style.display = isSsh  ? ''     : 'none';
+  entry.querySelector(`.app-http-path-${idx}`).style.display  = isHttp ? ''     : 'none';
+}
+
+let appCount = 0;
+function addAppEntry(app) {
+  const container = document.getElementById('apps-container');
+  const div = document.createElement('div');
+  div.innerHTML = appFields(app||{}, appCount++);
+  container.appendChild(div.firstElementChild);
+}
+function removeAppEntry(idx) { document.getElementById(`app-entry-${idx}`).remove(); }
+
+function collectApps() {
+  return Array.from(document.querySelectorAll('.app-entry')).map(entry => ({
+    name: entry.querySelector('.app-name').value.trim(),
+    type: entry.querySelector('.app-type').value,
+    port: parseInt(entry.querySelector('.app-port').value)||null,
+    check_string: entry.querySelector('.app-check-string').value.trim()||null,
+    ssh_user: entry.querySelector('.app-ssh-user').value.trim()||null,
+    ssh_password: entry.querySelector('.app-ssh-password').value||null,
+    http_path: entry.querySelector('.app-http-path').value.trim()||null,
+    points: parseInt(entry.querySelector('.app-points').value)||100,
+    penalty_points: parseInt(entry.querySelector('.app-penalty').value)||0,
+    interval_seconds: parseInt(entry.querySelector('.app-interval').value)||60,
+  }));
+}
+
+function profileModal(profile={}) {
+  appCount = 0;
+  showModal(`
+    <h2>${profile.id ? 'EDIT PROFILE' : 'NEW PROFILE'}</h2>
+    <div class="field"><label>Name</label><input id="m-pname" value="${esc(profile.name||'')}"></div>
+    <div class="field"><label>Description</label><input id="m-pdesc" value="${esc(profile.description||'')}"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 10px">
+      <span style="font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted)">// Applications</span>
+      <button onclick="addAppEntry()" style="border-color:var(--accent2);color:var(--accent2)">+ ADD APP</button>
+    </div>
+    <div id="apps-container"></div>
+    <div class="modal-footer">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="saveProfile(${profile.id||0})">Save</button>
+    </div>`);
+  (profile.applications||[]).forEach(a => addAppEntry(a));
+}
+function newProfile() { profileModal(); }
+function editProfile(id) { profileModal(profiles.find(p=>p.id===id)||{}); }
+async function saveProfile(id) {
+  const name = document.getElementById('m-pname').value.trim();
+  const description = document.getElementById('m-pdesc').value.trim();
+  const applications = collectApps();
+  if (!name) { toast('Name required','error'); return; }
+  if (id) await api('PUT', `/api/profiles/${id}`, { name, description, applications });
+  else await api('POST', '/api/profiles', { name, description, applications });
+  closeModal();
+  renderProfiles();
+}
+async function deleteProfile(id) {
+  if (!confirm('Delete profile? Existing instances will be affected.')) return;
+  await api('DELETE', `/api/profiles/${id}`);
+  renderProfiles();
+}
+function importProfile() {
+  showModal(`
+    <h2>IMPORT PROFILE JSON</h2>
+    <div class="field"><label>Paste exported JSON</label><textarea id="m-import-json" rows="12" style="font-family:var(--font-mono);font-size:12px"></textarea></div>
+    <div class="modal-footer">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="doImport()">Import</button>
+    </div>`);
+}
+async function doImport() {
+  try {
+    const json = JSON.parse(document.getElementById('m-import-json').value);
+    await api('POST', '/api/profiles/import', json);
+    toast('Profile imported');
+    closeModal();
+    renderProfiles();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── Instances ─────────────────────────────────────────────────────────────────
+let instances = [];
+async function renderInstances() {
+  [instances, teams, profiles] = await Promise.all([
+    api('GET', '/api/instances'),
+    api('GET', '/api/teams'),
+    api('GET', '/api/profiles'),
+  ]);
+  const el = document.getElementById('page-instances');
+  const rows = instances.map(i => `
+    <tr>
+      <td style="color:var(--text-muted)">${i.id}</td>
+      <td>${esc(i.label||'—')}</td>
+      <td style="font-family:var(--font-mono)">${esc(i.ip)}</td>
+      <td>${esc(i.profile_name)}</td>
+      <td>${i.team_id
+        ? `<span class="color-swatch" style="background:${teamColor(i.team_id)};box-shadow:0 0 5px ${teamColor(i.team_id)}"></span>${esc(i.team_name)}`
+        : '<span style="color:var(--text-muted)">Unassigned</span>'}</td>
+      <td class="actions">
+        <button onclick="editInstance(${i.id})">Edit</button>
+        <button class="danger" onclick="deleteInstance(${i.id})">Delete</button>
+      </td>
+    </tr>`).join('');
+  el.innerHTML = `
+    <h1>// INSTANCES</h1>
+    <div style="margin-bottom:16px"><button class="primary" onclick="newInstance()">+ NEW INSTANCE</button></div>
+    <table class="table">
+      <thead><tr><th>ID</th><th>Label</th><th>IP</th><th>Profile</th><th>Team</th><th>Actions</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" style="color:var(--text-muted)">No instances</td></tr>'}</tbody>
+    </table>`;
+}
+function teamColor(id) { const t = teams.find(t=>t.id===id); return t ? t.color : '#3d7a9e'; }
+function instanceModal(inst={}) {
+  const profileOpts = profiles.map(p=>`<option value="${p.id}" ${inst.profile_id===p.id?'selected':''}>${esc(p.name)}</option>`).join('');
+  const teamOpts = `<option value="">-- None --</option>` + teams.map(t=>`<option value="${t.id}" ${inst.team_id===t.id?'selected':''}>${esc(t.name)}</option>`).join('');
+  showModal(`
+    <h2>${inst.id ? 'EDIT INSTANCE' : 'NEW INSTANCE'}</h2>
+    <div class="field"><label>IP Address</label><input id="m-ip" value="${esc(inst.ip||'')}"></div>
+    <div class="field"><label>Label (optional)</label><input id="m-label" value="${esc(inst.label||'')}"></div>
+    <div class="field"><label>Profile</label><select id="m-profile">${profileOpts}</select></div>
+    <div class="field"><label>Team</label><select id="m-team">${teamOpts}</select></div>
+    <div class="modal-footer">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="saveInstance(${inst.id||0})">Save</button>
+    </div>`);
+}
+function newInstance() { instanceModal(); }
+function editInstance(id) { instanceModal(instances.find(i=>i.id===id)||{}); }
+async function saveInstance(id) {
+  const ip = document.getElementById('m-ip').value.trim();
+  const label = document.getElementById('m-label').value.trim();
+  const profile_id = parseInt(document.getElementById('m-profile').value);
+  const team_id = document.getElementById('m-team').value ? parseInt(document.getElementById('m-team').value) : null;
+  if (!ip) { toast('IP required','error'); return; }
+  if (!profile_id) { toast('Profile required','error'); return; }
+  if (id) await api('PUT', `/api/instances/${id}`, { ip, label, profile_id, team_id });
+  else await api('POST', '/api/instances', { ip, label, profile_id, team_id });
+  closeModal();
+  renderInstances();
+}
+async function deleteInstance(id) {
+  if (!confirm('Delete instance?')) return;
+  await api('DELETE', `/api/instances/${id}`);
+  renderInstances();
+}
+
+init();
+</script>
+</body>
+</html>

